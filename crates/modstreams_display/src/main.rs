@@ -1,4 +1,8 @@
-use std::{borrow::Cow, thread};
+use std::{
+    borrow::Cow,
+    sync::{Arc, Mutex},
+    thread,
+};
 
 use eframe::{egui, wgpu};
 
@@ -57,97 +61,135 @@ impl ShaderInput {
     }
 }
 
+struct ShaderState {
+    inputs: Vec<ShaderInput>,
+    render_pipeline: wgpu::RenderPipeline,
+    bind_group: wgpu::BindGroup,
+}
+
+impl ShaderState {
+    fn new(device: &wgpu::Device, shader_src: &str) -> Self {
+        let module = wgpu::naga::front::wgsl::parse_str(shader_src).unwrap();
+        let mut inputs = Vec::new();
+        for (_, global) in module.global_variables.iter() {
+            if let Some(name) = &global.name {
+                if let Some(binding) = global.binding {
+                    inputs.push(ShaderInput::new(device, name.clone(), binding.binding));
+                }
+            }
+        }
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shader_src)),
+        });
+
+        let mut bind_group_layout_entries = Vec::new();
+        for input in &inputs {
+            bind_group_layout_entries.push(input.create_bind_group_layout_entry());
+        }
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &bind_group_layout_entries,
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
+        });
+
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: None,
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        let mut bind_group_entries = Vec::new();
+        for input in &inputs {
+            bind_group_entries.push(input.create_bind_group_entry());
+        }
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &bind_group_layout,
+            entries: &bind_group_entries,
+        });
+
+        Self {
+            inputs,
+            render_pipeline,
+            bind_group,
+        }
+    }
+}
+
 fn run_read_thread(
     ctx: egui::Context,
     device: wgpu::Device,
     queue: wgpu::Queue,
     texture: wgpu::TextureView,
+    shader_channel_name: Arc<Mutex<String>>,
 ) {
-    let shader_src = include_str!("../shader.wgsl");
-
-    let module = wgpu::naga::front::wgsl::parse_str(shader_src).unwrap();
-    let mut inputs = Vec::new();
-    for (_, global) in module.global_variables.iter() {
-        if let Some(name) = &global.name {
-            if let Some(binding) = global.binding {
-                inputs.push(ShaderInput::new(&device, name.clone(), binding.binding));
-            }
-        }
-    }
-
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: None,
-        source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shader_src)),
-    });
-
-    let mut bind_group_layout_entries = Vec::new();
-    for input in &inputs {
-        bind_group_layout_entries.push(input.create_bind_group_layout_entry());
-    }
-
-    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: None,
-        entries: &bind_group_layout_entries,
-    });
-
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: None,
-        bind_group_layouts: &[Some(&bind_group_layout)],
-        immediate_size: 0,
-    });
-
-    let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: None,
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            compilation_options: Default::default(),
-            buffers: &[],
-        },
-        primitive: wgpu::PrimitiveState::default(),
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_main"),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                blend: Some(wgpu::BlendState::REPLACE),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        multiview_mask: None,
-        cache: None,
-    });
-
-    let mut bind_group_entries = Vec::new();
-    for input in &inputs {
-        bind_group_entries.push(input.create_bind_group_entry());
-    }
-
-    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: None,
-        layout: &bind_group_layout,
-        entries: &bind_group_entries,
-    });
-
+    let mut shader_state: Option<ShaderState> = None;
     let mut client = ModstreamsClient::new(7460);
-    for input in &inputs {
-        client.subscribe(&input.name).unwrap();
-    }
+    client.subscribe("shader").unwrap();
     loop {
         let packet = client.read().unwrap();
         let mut updated = false;
         if let Packet::Message { channel, content } = packet {
-            for input in &mut inputs {
-                if input.name == channel {
-                    if let Ok(s) = str::from_utf8(&content) {
-                        if let Ok(v) = s.parse() {
-                            input.value = v;
-                            input.update(&queue);
-                            updated = true;
+            if channel == *shader_channel_name.lock().unwrap() {
+                if let Ok(shader_src) = str::from_utf8(&content) {
+                    let mut state = ShaderState::new(&device, shader_src);
+                    if let Some(old_state) = &shader_state {
+                        for old_input in &old_state.inputs {
+                            client.unsubscribe(&old_input.name).unwrap();
+                            for input in &mut state.inputs {
+                                if old_input.name == input.name {
+                                    input.value = old_input.value;
+                                    input.update(&queue);
+                                }
+                            }
+                        }
+                    }
+                    for input in &state.inputs {
+                        client.subscribe(&input.name).unwrap();
+                    }
+                    shader_state = Some(state);
+                    updated = true;
+                }
+            } else {
+                if let Some(state) = &mut shader_state {
+                    for input in &mut state.inputs {
+                        if input.name == channel {
+                            if let Ok(s) = str::from_utf8(&content) {
+                                if let Ok(v) = s.parse() {
+                                    input.value = v;
+                                    input.update(&queue);
+                                    updated = true;
+                                }
+                            }
                         }
                     }
                 }
@@ -158,35 +200,40 @@ fn run_read_thread(
             continue;
         }
 
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: None,
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &texture,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+        if let Some(state) = &shader_state {
+            let mut encoder =
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            {
+                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &texture,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
 
-            render_pass.set_pipeline(&render_pipeline);
-            render_pass.set_bind_group(0, &bind_group, &[]);
-            render_pass.draw(0..6, 0..1);
+                render_pass.set_pipeline(&state.render_pipeline);
+                render_pass.set_bind_group(0, &state.bind_group, &[]);
+                render_pass.draw(0..6, 0..1);
+            }
+            queue.submit(Some(encoder.finish()));
+            ctx.request_repaint();
         }
-        queue.submit(Some(encoder.finish()));
-        ctx.request_repaint();
     }
 }
 
 struct DisplayApp {
+    display_shader_channel_name: String,
+    shader_channel_name: Arc<Mutex<String>>,
     egui_texture: egui::TextureId,
 }
 
@@ -222,14 +269,32 @@ impl DisplayApp {
 
         let ctx = cc.egui_ctx.clone();
 
-        thread::spawn(move || run_read_thread(ctx, device, queue, texture_view));
+        let shader_channel_name = Arc::new(Mutex::new(String::new()));
+        let shader_channel_name_clone = shader_channel_name.clone();
+        thread::spawn(move || {
+            run_read_thread(ctx, device, queue, texture_view, shader_channel_name_clone)
+        });
 
-        Self { egui_texture }
+        Self {
+            egui_texture,
+            shader_channel_name,
+            display_shader_channel_name: String::new(),
+        }
     }
 }
 
 impl eframe::App for DisplayApp {
     fn ui(&mut self, ui: &mut eframe::egui::Ui, _: &mut eframe::Frame) {
+        egui::MenuBar::new().ui(ui, |ui| {
+            ui.label("Shader channel");
+            let text_response = ui.add(egui::TextEdit::singleline(
+                &mut self.display_shader_channel_name,
+            ));
+            if text_response.changed() {
+                *self.shader_channel_name.lock().unwrap() =
+                    self.display_shader_channel_name.clone();
+            }
+        });
         egui::CentralPanel::default().show(ui, |ui| {
             ui.add(egui::Image::new((
                 self.egui_texture,
