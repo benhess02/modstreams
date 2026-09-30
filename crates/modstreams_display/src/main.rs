@@ -79,7 +79,12 @@ impl ShaderState {
             }
         }
 
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let vertex_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("../vertex.wgsl"))),
+        });
+
+        let fragment_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shader_src)),
         });
@@ -104,7 +109,7 @@ impl ShaderState {
             label: None,
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
-                module: &shader,
+                module: &vertex_shader,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
                 buffers: &[],
@@ -113,8 +118,8 @@ impl ShaderState {
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
+                module: &fragment_shader,
+                entry_point: Some("main"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba8UnormSrgb,
