@@ -1,9 +1,6 @@
 use std::{borrow::Cow, thread};
 
-use eframe::{
-    egui::{self, Key::U},
-    wgpu,
-};
+use eframe::{egui, wgpu};
 
 use bytemuck;
 use modstreams_core::{ModstreamsClient, Packet};
