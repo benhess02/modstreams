@@ -1,0 +1,13 @@
+[package]
+name = "modstreams"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.6.7", features = ["derive"] }
+notify = "8.2.0"
+modstreams_core = { path = "crates/modstreams_core" }
+
+[workspace]
+resolver="3"
+members=["crates/modstreams_controls", "crates/modstreams_core", "crates/modstreams_display"]
