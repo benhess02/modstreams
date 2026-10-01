@@ -3,3 +3,4 @@ mod packet;
 
 pub use crate::client::ModstreamsClient;
 pub use crate::packet::Packet;
+pub use crate::packet::RefPacket;

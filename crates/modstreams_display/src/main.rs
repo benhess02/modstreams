@@ -156,10 +156,9 @@ fn run_read_thread(
     queue: wgpu::Queue,
     texture: wgpu::TextureView,
     shader_channel_name: Arc<Mutex<String>>,
+    mut client: ModstreamsClient,
 ) {
     let mut shader_state: Option<ShaderState> = None;
-    let mut client = ModstreamsClient::new(7460);
-    client.subscribe("shader").unwrap();
     loop {
         let packet = client.read().unwrap();
         let mut updated = false;
@@ -240,6 +239,7 @@ struct DisplayApp {
     display_shader_channel_name: String,
     shader_channel_name: Arc<Mutex<String>>,
     egui_texture: egui::TextureId,
+    client: ModstreamsClient,
 }
 
 impl DisplayApp {
@@ -252,8 +252,8 @@ impl DisplayApp {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d {
-                width: 800,
-                height: 600,
+                width: 1600,
+                height: 1200,
                 ..Default::default()
             },
             mip_level_count: 1,
@@ -276,14 +276,24 @@ impl DisplayApp {
 
         let shader_channel_name = Arc::new(Mutex::new(String::new()));
         let shader_channel_name_clone = shader_channel_name.clone();
+        let client = ModstreamsClient::new(7460);
+        let client_clone = client.try_clone().unwrap();
         thread::spawn(move || {
-            run_read_thread(ctx, device, queue, texture_view, shader_channel_name_clone)
+            run_read_thread(
+                ctx,
+                device,
+                queue,
+                texture_view,
+                shader_channel_name_clone,
+                client_clone,
+            );
         });
 
         Self {
             egui_texture,
             shader_channel_name,
             display_shader_channel_name: String::new(),
+            client,
         }
     }
 }
@@ -292,12 +302,17 @@ impl eframe::App for DisplayApp {
     fn ui(&mut self, ui: &mut eframe::egui::Ui, _: &mut eframe::Frame) {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.label("Shader channel");
+            let old_shader_channel = self.display_shader_channel_name.clone();
             let text_response = ui.add(egui::TextEdit::singleline(
                 &mut self.display_shader_channel_name,
             ));
             if text_response.changed() {
                 *self.shader_channel_name.lock().unwrap() =
                     self.display_shader_channel_name.clone();
+                self.client.unsubscribe(&old_shader_channel).unwrap();
+                self.client
+                    .subscribe(&self.display_shader_channel_name)
+                    .unwrap();
             }
         });
         egui::CentralPanel::default().show(ui, |ui| {

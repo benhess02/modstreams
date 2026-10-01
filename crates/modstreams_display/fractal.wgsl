@@ -19,7 +19,7 @@ fn main(@location(0) uv: vec2<f32>) -> @location(0) vec4f {
         z = complex_mul(z, z) + c;
         if length(z) >= 2. {
             let value = f32(i) / f32(max_iters);
-            return vec4f(0.1 + value * 0.9, value, value, 1.0);
+            return vec4f(value, value, 0.1 + value * 0.9, 1.0);
         }
     }
     return vec4f(0.0, 0.0, 0.0, 1.0);

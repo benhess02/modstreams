@@ -5,7 +5,7 @@ use std::{
     thread,
 };
 
-use modstreams_core::Packet;
+use modstreams_core::{Packet, RefPacket};
 
 const LOOPBACK_ADDRESS: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
@@ -111,6 +111,7 @@ pub fn run_daemon(port: u16) {
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || run_listener_thread(port, sender));
     let mut clients = HashMap::new();
+    let mut previous_values: HashMap<String, Vec<u8>> = HashMap::new();
     loop {
         let message = receiver.recv().unwrap();
         match message {
@@ -121,10 +122,8 @@ pub fn run_daemon(port: u16) {
                 clients.remove(&addr);
             }
             DaemonEvent::Packet(src_addr, packet) => match &packet {
-                Packet::Message {
-                    channel,
-                    content: _,
-                } => {
+                Packet::Message { channel, content } => {
+                    previous_values.insert(channel.clone(), content.clone());
                     for (addr, client) in &mut clients {
                         if *addr != src_addr && client.channels.is_subscribed(channel) {
                             let _ = packet.write(&mut client.stream);
@@ -132,11 +131,16 @@ pub fn run_daemon(port: u16) {
                     }
                 }
                 Packet::Subscribe { channel } => {
-                    clients
-                        .get_mut(&src_addr)
-                        .unwrap()
-                        .channels
-                        .subscribe(channel.clone());
+                    let client = clients.get_mut(&src_addr).unwrap();
+                    client.channels.subscribe(channel.clone());
+                    if let Some(value) = previous_values.get(channel) {
+                        RefPacket::Message {
+                            channel,
+                            content: value,
+                        }
+                        .write(&mut client.stream)
+                        .unwrap();
+                    }
                 }
                 Packet::SubscribeAll => {
                     clients.get_mut(&src_addr).unwrap().channels.subscribe_all();
