@@ -101,7 +101,7 @@ fn try_listener_accept_client(
 
 fn run_listener_thread(port: u16, client_sender: mpsc::Sender<DaemonEvent>) {
     let listener = TcpListener::bind(SocketAddr::new(LOOPBACK_ADDRESS, port)).unwrap();
-    println!("lostreams daemon running on port {}", port);
+    println!("modstreams daemon running on port {}", port);
     loop {
         let _ = try_listener_accept_client(&listener, &client_sender);
     }
