@@ -38,7 +38,6 @@ fn run_read_thread(
 struct ControlsApp {
     client: ModstreamsClient,
     controls: Arc<Mutex<Vec<Control>>>,
-    color: egui::Color32,
 }
 
 impl ControlsApp {
@@ -51,11 +50,7 @@ impl ControlsApp {
         let read_controls = controls.clone();
         let read_ctx = cc.egui_ctx.clone();
         thread::spawn(move || run_read_thread(read_client, read_controls, read_ctx));
-        Self {
-            client,
-            controls,
-            color: egui::Color32::BLACK,
-        }
+        Self { client, controls }
     }
 }
 
