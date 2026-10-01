@@ -316,10 +316,9 @@ impl eframe::App for DisplayApp {
             }
         });
         egui::CentralPanel::default().show(ui, |ui| {
-            ui.add(egui::Image::new((
-                self.egui_texture,
-                egui::Vec2::new(800., 600.),
-            )));
+            ui.add(
+                egui::Image::new((self.egui_texture, egui::Vec2::new(800., 600.))).shrink_to_fit(),
+            );
         });
     }
 }
