@@ -62,79 +62,86 @@ impl ControlsApp {
 impl eframe::App for ControlsApp {
     fn ui(&mut self, ui: &mut eframe::egui::Ui, frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ui, |ui| {
-            let mut controls = self.controls.lock().unwrap();
-            let mut to_remove = None;
-            for i in 0..controls.len() {
-                let control = &mut controls[i];
-                let channel_response =
-                    ui.add(egui::TextEdit::singleline(&mut control.channel_name));
-                let value_response = ui.add_enabled(
-                    control.channel_name.len() != 0,
-                    egui::TextEdit::singleline(&mut control.value),
-                );
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                let mut controls = self.controls.lock().unwrap();
+                let mut to_remove = None;
+                for i in 0..controls.len() {
+                    let control = &mut controls[i];
+                    let channel_response = ui.add(
+                        egui::TextEdit::singleline(&mut control.channel_name)
+                            .desired_width(f32::INFINITY),
+                    );
+                    let value_response = ui.add_enabled(
+                        control.channel_name.len() != 0,
+                        egui::TextEdit::singleline(&mut control.value).desired_width(f32::INFINITY),
+                    );
 
-                let mut changed = value_response.changed();
+                    let mut changed = value_response.changed();
 
-                match control.value.parse::<f32>() {
-                    Ok(mut v) => {
-                        control.min_num = control.min_num.min(v);
-                        control.max_num = control.max_num.max(v);
-                        let slider_response = ui.add(
-                            egui::widgets::Slider::new(&mut v, control.min_num..=control.max_num)
+                    match control.value.parse::<f32>() {
+                        Ok(mut v) => {
+                            control.min_num = control.min_num.min(v);
+                            control.max_num = control.max_num.max(v);
+                            let slider_response = ui.add(
+                                egui::widgets::Slider::new(
+                                    &mut v,
+                                    control.min_num..=control.max_num,
+                                )
                                 .step_by(control.increment)
                                 .show_value(false),
-                        );
-                        if slider_response.changed() {
-                            control.value = v.to_string();
-                            changed = true;
+                            );
+                            if slider_response.changed() {
+                                control.value = v.to_string();
+                                changed = true;
+                            }
+                            ui.horizontal(|ui| {
+                                ui.label("Min");
+                                ui.add(egui::DragValue::new(&mut control.min_num));
+                                ui.label("Max");
+                                ui.add(egui::DragValue::new(&mut control.max_num));
+                                ui.label("Step");
+                                ui.add(egui::DragValue::new(&mut control.increment));
+                            });
                         }
-                        ui.horizontal(|ui| {
-                            ui.label("Min");
-                            ui.add(egui::DragValue::new(&mut control.min_num));
-                            ui.label("Max");
-                            ui.add(egui::DragValue::new(&mut control.max_num));
-                            ui.label("Step");
-                            ui.add(egui::DragValue::new(&mut control.increment));
-                        });
+                        Err(_) => {}
                     }
-                    Err(_) => {}
+
+                    if channel_response.changed() {
+                        self.client
+                            .unsubscribe(&control.subscribed_channel_name)
+                            .unwrap();
+                        self.client.subscribe(&control.channel_name).unwrap();
+                        control.subscribed_channel_name = control.channel_name.clone();
+                    }
+
+                    if changed {
+                        self.client
+                            .send(&control.channel_name, control.value.as_bytes())
+                            .unwrap();
+                    }
+
+                    if ui.button("Remove").clicked() {
+                        to_remove = Some(i);
+                    }
+                    ui.add_space(10.);
                 }
 
-                if channel_response.changed() {
-                    self.client
-                        .unsubscribe(&control.subscribed_channel_name)
-                        .unwrap();
-                    self.client.subscribe(&control.channel_name).unwrap();
-                    control.subscribed_channel_name = control.channel_name.clone();
+                if let Some(index) = to_remove {
+                    let removed = controls.remove(index);
+                    self.client.unsubscribe(&removed.channel_name).unwrap();
                 }
 
-                if changed {
-                    self.client
-                        .send(&control.channel_name, control.value.as_bytes())
-                        .unwrap();
+                if ui.button("Add").clicked() {
+                    controls.push(Control {
+                        subscribed_channel_name: String::new(),
+                        channel_name: String::new(),
+                        value: String::new(),
+                        min_num: 0.,
+                        max_num: 100.,
+                        increment: 1.,
+                    });
                 }
-
-                if ui.button("Remove").clicked() {
-                    to_remove = Some(i);
-                }
-                ui.add_space(10.);
-            }
-
-            if let Some(index) = to_remove {
-                let removed = controls.remove(index);
-                self.client.unsubscribe(&removed.channel_name).unwrap();
-            }
-
-            if ui.button("Add").clicked() {
-                controls.push(Control {
-                    subscribed_channel_name: String::new(),
-                    channel_name: String::new(),
-                    value: String::new(),
-                    min_num: 0.,
-                    max_num: 100.,
-                    increment: 1.,
-                });
-            }
+            });
         });
     }
 }
@@ -142,7 +149,10 @@ impl eframe::App for ControlsApp {
 fn main() {
     let client = ModstreamsClient::new(7460);
     let controls = Arc::new(Mutex::new(Vec::new()));
-    let native_options = eframe::NativeOptions::default();
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default().with_inner_size((300., 500.)),
+        ..Default::default()
+    };
     eframe::run_native(
         "Controls",
         native_options,
